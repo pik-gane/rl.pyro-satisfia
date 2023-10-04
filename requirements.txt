@@ -1,6 +1,6 @@
 pyro-ppl==1.8.*
-torch==1.9.*
-gym
+torch>=1.9.*
+gym==0.25.*
 matplotlib
 numpy
 tqdm

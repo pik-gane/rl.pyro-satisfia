@@ -13,6 +13,8 @@ import utils.torch
 
 warnings.filterwarnings("ignore")
 
+# set an arbitrary aspiration value:
+aleph = 123.456
 
 class AC:
     """
@@ -132,9 +134,9 @@ class AC:
     def create_everything(self, seed):
         utils.seed.seed(seed)
         env = gym.make(self.ENV_NAME)
-        env.seed(seed)
+        env.reset(seed=seed)
         test_env = gym.make(self.ENV_NAME)
-        test_env.seed(10 + seed)
+        test_env.reset(seed=10 + seed)
 
         assert (isinstance(env.action_space, gym.spaces.discrete.Discrete))
         assert (isinstance(env.observation_space, gym.spaces.box.Box))
@@ -184,16 +186,20 @@ class AC:
         with pyro.plate("batch", S.shape[0], device=self.t.device):
             A = pyro.sample("action", pyro.distributions.Categorical(logits=self.log_pi(S)))
 
+    # replace the "maximize Q" objective by a "minimize squared deviation from aspiration value" objective: 
+    def objective(self, q):
+        return - (q - aleph)**2;
+
     def model_unif(self, S):
         with pyro.plate("batch", S.shape[0], device=self.t.device):
             A = pyro.sample("action", pyro.distributions.Categorical(logits=self.unif_logits))
-            qvalues = self.Qt(S).gather(index=A.view(-1, 1), dim=-1).squeeze()
-            pyro.factor("reward", qvalues / self.TEMPERATURE)
+            objective_values = self.objective(self.Qt(S)).gather(index=A.view(-1, 1), dim=-1).squeeze() # use the objective function here
+            pyro.factor("reward", objective_values / self.TEMPERATURE)
 
     def model_softmaxQ(self, S):
         with pyro.plate("batch", S.shape[0], device=self.t.device):
             probs = torch.nn.functional.softmax(
-                self.Qt(S) / self.TEMPERATURE,
+                self.objective(self.Qt(S)) / self.TEMPERATURE, # use the objective function here
                 dim=-1
             )
             A = pyro.sample("action", pyro.distributions.Categorical(probs))
@@ -231,7 +237,7 @@ class AC:
         else:
             if self.SOFT_ON:
                 loss_policy = torch.nn.functional.kl_div(
-                    torch.nn.functional.log_softmax(Qt(S).detach() / self.TEMPERATURE, dim=-1),
+                    torch.nn.functional.log_softmax(self.objective(Qt(S)).detach() / self.TEMPERATURE, dim=-1), # use the objective function here
                     probs_S,
                     reduction='batchmean'
                 )  # [torch.nn.functional.kl_div] input: log x, target: y, ret: y * (log y - log x)
@@ -344,4 +350,4 @@ if __name__ == "__main__":
     # AC("hard", ENV_NAME="CartPole-v0", GAMMA=1).run(SHOW=False)
     # AC("soft", ENV_NAME="CartPole-v0", GAMMA=1, TEMPERATURE=1, SEEDS=[1]).run(SHOW=False)
     # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="unif", SVI_EPOCHS = 1).run(SHOW=False)
-    # AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="softmaxQ", SVI_EPOCHS = 1).run(SHOW=False)
+    AC("pyro", ENV_NAME="CartPole-v0", GAMMA=1, SMOKE_TEST=True, TEMPERATURE=1, PRIOR="softmaxQ", SVI_EPOCHS = 1).run(SHOW=False)
